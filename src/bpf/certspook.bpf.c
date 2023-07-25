@@ -37,11 +37,16 @@ SEC("kprobe/__sys_connect")
 int BPF_KPROBE(probe_sys_connect, int fd, struct sockaddr *addr, int addrlen) {
   __u16 sk_family;
   struct sockaddr_in addr_in;
+  struct sockaddr_in6 addr_in6;
 
   if (bpf_probe_read_user(&sk_family, sizeof(sk_family), &addr->sa_family) == 0) {
     if (sk_family == AF_INET) {
       if (bpf_probe_read_user(&addr_in, sizeof(addr_in), addr) == 0) {
         bpf_ringbuf_output(&connaddrs, &addr_in, sizeof(addr_in), 0);
+      }
+    } else if (sk_family == AF_INET6) {
+      if (bpf_probe_read_user(&addr_in6, sizeof(addr_in6), addr) == 0) {
+        bpf_ringbuf_output(&connaddrs, &addr_in6, sizeof(addr_in6), 0);
       }
     }
   }

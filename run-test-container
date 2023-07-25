@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+# CAP_BPF and CAP_PERFMON will be supported on AWS Fargate:
+# https://github.com/aws/containers-roadmap/issues/1027#issuecomment-1433911314
+
+# In theory this should be able to run with these capabilities but practice
+# shows otherwise:
+# --cap-add CAP_BPF --cap-add CAP_PERFMON --cap-add CAP_SYS_RESOURCE \
+
+podman run -it \
+  --privileged \
+  -v "$PWD/target/debug:/opt/certspook" \
+  --entrypoint /bin/bash \
+  certspook:latest \
+  -l
+
