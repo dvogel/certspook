@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use libbpf_cargo::SkeletonBuilder;
 use std::env;
 use std::path::PathBuf;

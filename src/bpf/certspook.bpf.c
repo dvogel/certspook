@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
 // This module connects to the connect() system call and copies sockaddr
 // structs to a ringbuffer to be read by a companion userspace program.
 
