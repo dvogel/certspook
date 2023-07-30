@@ -32,6 +32,14 @@ impl RemoteConnection {
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         WrappedSockaddr::from_bytes(bytes).and_then(|w| Self::from_sockaddr(&w))
     }
+
+    pub fn ip_addr(&self) -> IpAddr {
+        self.addr.clone()
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
 }
 
 impl fmt::Display for RemoteConnection {
