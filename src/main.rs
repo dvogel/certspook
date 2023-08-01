@@ -58,8 +58,10 @@ fn handle_lost_events(cpu: i32, count: u64) {
 }
 
 fn main() -> Result<()> {
+    let expiration_threshold = Duration::from_secs(60u64 * 60u64 * 24u64 * 365u64);
+
     let (tx_chkque, rx_chkque) = channel::<RemoteConnection>();
-    let _check_thread = spawn_check_thread(rx_chkque);
+    let _check_thread = spawn_check_thread(expiration_threshold, rx_chkque);
 
     let (tx_rconn, rx_rconn) = channel::<RemoteConnection>();
     let _squelch_thread = spawn_squelch_thread(Duration::from_secs(10u64), rx_rconn, tx_chkque);
