@@ -6,8 +6,7 @@
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-mod wrapped_sockaddr;
-use wrapped_sockaddr::WrappedSockaddr;
+use crate::wrapped_sockaddr::WrappedSockaddr;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RemoteConnection {

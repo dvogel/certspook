@@ -7,6 +7,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::check::CheckDatum;
 use crate::remote_connection::RemoteConnection;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,7 +32,7 @@ impl Default for AddrSeenStats {
 pub fn spawn_squelch_thread(
     threshold: Duration,
     rx: Receiver<RemoteConnection>,
-    tx: Sender<RemoteConnection>,
+    tx: Sender<CheckDatum>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let addr_histo: Rc<RefCell<BTreeMap<RemoteConnection, AddrSeenStats>>> =
@@ -52,10 +53,13 @@ pub fn spawn_squelch_thread(
                 Some(last_checked) => (Instant::now() - last_checked) > threshold,
                 None => true,
             };
-            println!("{}", &rconn);
             if will_check_now {
-                tx.send(rconn);
+                println!("debug:queued-connection:{}", &rconn);
+                std::thread::sleep(Duration::from_secs(1));
+                tx.send(CheckDatum::RemoteConnectionMessage(rconn));
                 addr_stats.last_checked = Some(Instant::now());
+            } else {
+                println!("debug:squelched-observation:{}", &rconn);
             }
         }
     })

@@ -1,0 +1,9 @@
+# certspook
+
+This project is an experiment to determine if one could use eBPF to reliably capture enough TLS connection details in order to determine which remote certificates a system relies upon.
+
+[quote]
+The spooks were senior constables who wore no uniform, worked in pairs and followed constables about the city and suburbs to see if they did their work properly. 
+
+The idea is that eBPF can monitor outgoing connections, determine which are using TLS, and then export enough data to user-space for those certificates to be periodically checked for upcoming expirations.
+

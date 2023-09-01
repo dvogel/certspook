@@ -8,20 +8,20 @@ use plain::Plain;
 use std::mem;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub(super) struct WrappedSockaddrIn(pub(super) libc::sockaddr_in);
+pub struct WrappedSockaddrIn(pub libc::sockaddr_in);
 unsafe impl Plain for WrappedSockaddrIn {}
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub(super) struct WrappedSockaddrIn6(pub(super) libc::sockaddr_in6);
+pub struct WrappedSockaddrIn6(pub libc::sockaddr_in6);
 unsafe impl Plain for WrappedSockaddrIn6 {}
 
-pub(super) enum WrappedSockaddr {
+pub enum WrappedSockaddr {
     V4(WrappedSockaddrIn),
     V6(WrappedSockaddrIn6),
 }
 
 impl WrappedSockaddr {
-    pub(super) fn from_bytes(buf: &[u8]) -> Option<WrappedSockaddr> {
+    pub fn from_bytes(buf: &[u8]) -> Option<WrappedSockaddr> {
         // libc normally converts these from network byte order to host byte order. Since we copied
         // them directly from the kernel we need to do so.
         if buf.len() == mem::size_of::<libc::sockaddr_in>() {
