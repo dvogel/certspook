@@ -7,7 +7,7 @@ use std::net::{IpAddr, Shutdown, TcpStream};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 extern crate chrono;
 use anyhow::{anyhow, Result};
@@ -15,11 +15,9 @@ use rustls::client::ServerCertVerified;
 use rustls::client::ServerCertVerifier;
 use rustls::server::DnsName;
 use rustls::{Certificate, ClientConfig, ClientConnection, ServerName};
+use slog::{debug, error, info, Logger};
 use trust_dns_resolver::Resolver;
-use x509_parser::prelude::{
-    BasicExtension, FromDer, GeneralName, SubjectAlternativeName, Validity, X509Certificate,
-    X509Name,
-};
+use x509_parser::prelude::{FromDer, GeneralName, Validity, X509Certificate};
 use x509_parser::time::ASN1Time;
 
 use crate::gai_result::GetAddrInfoResult;
@@ -30,12 +28,12 @@ struct NoopServerCertVerifier;
 impl ServerCertVerifier for NoopServerCertVerifier {
     fn verify_server_cert(
         &self,
-        end_entity: &Certificate,
-        intermediates: &[Certificate],
-        server_name: &ServerName,
-        scts: &mut dyn Iterator<Item = &[u8]>,
-        ocsp_response: &[u8],
-        now: SystemTime,
+        _end_entity: &Certificate,
+        _intermediates: &[Certificate],
+        _server_name: &ServerName,
+        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _ocsp_response: &[u8],
+        _now: SystemTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         Ok(ServerCertVerified::assertion())
     }
@@ -55,6 +53,7 @@ struct CertificateDetails {
 struct CertCheckResults {
     pub dns_match: bool,
     pub days_until_expiration: i64,
+    pub subject_name: String,
 }
 
 impl CertCheckResults {
@@ -86,11 +85,11 @@ fn handshake_with_remote(
     }
 
     tls_conn.send_close_notify();
-    sock.shutdown(Shutdown::Both);
+    let _ = sock.shutdown(Shutdown::Both);
 
     let raw_certs = tls_conn
         .peer_certificates()
-        .map(|certs| Vec::from(certs))
+        .map(Vec::from)
         .ok_or_else(|| anyhow!("Could not obtain certificates from {}", rconn.clone()))?;
 
     let mut certs: Vec<CertificateDetails> = Vec::new();
@@ -103,7 +102,7 @@ fn handshake_with_remote(
         });
     }
 
-    if certs.len() == 0 {
+    if certs.is_empty() {
         return Err(anyhow!("No certificates available from {}", rconn.clone()).into());
     }
 
@@ -119,7 +118,7 @@ fn rfc3339_not_after(cert: &X509Certificate) -> String {
 
 fn collect_ptr_names(ip_addr: &IpAddr) -> Result<Vec<String>, Box<dyn Error>> {
     let resolver = Resolver::from_system_conf().unwrap();
-    let records = resolver.reverse_lookup(ip_addr.clone())?;
+    let records = resolver.reverse_lookup(*ip_addr)?;
     Ok(records
         .iter()
         .map(|n| String::from(n.to_ascii().trim_end_matches('.')))
@@ -130,12 +129,10 @@ fn collect_cert_subject_names(cert: &X509Certificate) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     names.push(format!("{}", cert.subject()));
 
-    if let Ok(san_ext) = cert.subject_alternative_name() {
-        if let Some(san_ext) = san_ext {
-            for name in san_ext.value.general_names.iter() {
-                if let GeneralName::DNSName(name_ref) = name {
-                    names.push(name_ref.to_string());
-                }
+    if let Ok(Some(san_ext)) = cert.subject_alternative_name() {
+        for name in san_ext.value.general_names.iter() {
+            if let GeneralName::DNSName(name_ref) = name {
+                names.push(name_ref.to_string());
             }
         }
     }
@@ -147,6 +144,7 @@ fn check_cert(cert: &CertificateDetails, dns_name: Option<&String>) -> CertCheck
     let mut result = CertCheckResults {
         dns_match: false,
         days_until_expiration: 0,
+        subject_name: cert.subject_names[0].clone(),
     };
 
     // If the dns_name parameter is None then the connection is assumed to have been made by
@@ -165,21 +163,46 @@ fn check_cert(cert: &CertificateDetails, dns_name: Option<&String>) -> CertCheck
     result
 }
 
+fn log_cert_result(
+    log: &Logger,
+    expiration_threshold: &time::Duration,
+    rconn: &RemoteConnection,
+    check: &CertCheckResults,
+) {
+    if check.is_expired() {
+        error!(log, "cert-is-expired";
+            "remote-connection" => rconn.to_string(),
+            "cert-subject-name" => check.subject_name.clone(),
+            "days-until-expiration" => check.days_until_expiration,
+        );
+    } else if check.will_expire_soon(expiration_threshold.whole_days()) {
+        error!(log, "cert-expires-soon";
+            "remote-connection" => rconn.to_string(),
+            "cert-subject-name" => check.subject_name.clone(),
+            "days-until-expiration" => check.days_until_expiration,
+        );
+    } else {
+        info!(log,
+            "cert-match";
+            "remote-connection" => rconn.to_string(),
+            "cert-subject-name" => check.subject_name.clone(),
+        );
+    }
+}
+
 fn check_remote_connection(
-    expiration_threshold: Duration,
+    log: &Logger,
+    expiration_threshold: &time::Duration,
     rconn: &RemoteConnection,
     hostnames: Option<&BTreeSet<String>>,
 ) -> Result<(), Box<dyn Error>> {
     let dns_names: Vec<String> = match hostnames {
-        Some(hset) => hset.iter().map(|h| h.clone()).collect(),
-        None => {
-            println!("info:using-ptr-records:{}", &rconn);
-            collect_ptr_names(&rconn.ip_addr())?
-        }
+        Some(hset) => hset.iter().cloned().collect(),
+        None => collect_ptr_names(&rconn.ip_addr())?,
     };
 
     for dns_name in dns_names {
-        let certs = handshake_with_remote(&rconn, &dns_name)?;
+        let certs = handshake_with_remote(rconn, &dns_name)?;
         let primary_cert = &certs[0];
 
         let check = check_cert(primary_cert, Some(&dns_name.to_string()));
@@ -189,15 +212,13 @@ fn check_remote_connection(
         // hostnames. Needs further consideration on the cost of false positives vs false
         // negatives after the proof-of-concept stage is completed.
         if check.dns_match {
-            println!(
-                "info:cert-match:{}:{}",
-                rconn, primary_cert.subject_names[0]
-            );
+            log_cert_result(log, expiration_threshold, rconn, &check);
             return Ok(());
         } else {
-            println!(
-                "info:cert-mismatch:{}:{}",
-                rconn, primary_cert.subject_names[0]
+            info!(log,
+                "cert-mismatch";
+                "remote-connection" => rconn.to_string(),
+                "cert" => primary_cert.subject_names[0].clone()
             );
         }
     }
@@ -209,10 +230,10 @@ fn check_remote_connection(
     // address.
     // TODO: Okay, maybe not our *best* because we could implement TLS handshake decoding in BPF
     // to capture the actual SNI extension record. No one would do *that* ... would they?
-    let default_certs = handshake_with_remote(&rconn, &"".to_string())?;
+    let default_certs = handshake_with_remote(rconn, &"".to_string())?;
     let default_check = check_cert(&default_certs[0], None);
 
-    println!("err:no-cert-match:{}", rconn.ip_addr());
+    log_cert_result(log, expiration_threshold, rconn, &default_check);
     Ok(())
 }
 
@@ -222,39 +243,50 @@ pub enum CheckDatum {
 }
 
 pub fn spawn_check_thread(
-    expiration_threshold: Duration,
+    log: Logger,
+    expiration_threshold: time::Duration,
     rx: Receiver<CheckDatum>,
 ) -> thread::JoinHandle<()> {
-    let mut gai_history: RefCell<BTreeMap<IpAddr, BTreeSet<String>>> =
-        RefCell::new(BTreeMap::new());
+    let gai_history: RefCell<BTreeMap<IpAddr, BTreeSet<String>>> = RefCell::new(BTreeMap::new());
     thread::spawn(move || loop {
         match rx.recv() {
             Err(_) => return,
             Ok(msg) => match msg {
                 CheckDatum::RemoteConnectionMessage(rconn) => {
+                    debug!(log, "will-check"; "remote-connection" => rconn.to_string());
                     let borrowed_hist = gai_history.borrow();
                     let hostnames = borrowed_hist.get(&rconn.ip_addr());
-                    println!(
-                        "debug:checking-with-hostnames:{}:{:?}",
-                        &rconn.ip_addr(),
-                        &hostnames
-                    );
-                    if let Err(e) = check_remote_connection(expiration_threshold, &rconn, hostnames)
+                    if let Some(hostnames) = hostnames {
+                        debug!(
+                            log,
+                            "checking-with-hostnames";
+                            "addr" => &rconn.ip_addr().to_string(),
+                            "hostnames" => format!("{:?}", &hostnames),
+                        );
+                    } else {
+                        debug!(log,
+                            "checking-via-ptr-records";
+                            "addr" => &rconn.ip_addr().to_string());
+                    }
+
+                    if let Err(e) =
+                        check_remote_connection(&log, &expiration_threshold, &rconn, hostnames)
                     {
-                        eprintln!("error:{}", e);
+                        error!(log, "{}", e);
                     }
                 }
                 CheckDatum::GetAddrInfoMessage(gai) => {
-                    println!(
-                        "info:captured-getaddrinfo-result:{}:{}",
-                        &gai.hostname, &gai.addr
+                    info!(
+                        log,
+                        "captured-getaddrinfo-result";
+                        "hostname" => &gai.hostname, "addr" => &gai.addr.to_string()
                     );
                     let mut borrowed_hist = gai_history.borrow_mut();
                     let hostnames = borrowed_hist.entry(gai.addr).or_default();
                     if hostnames.insert(gai.hostname.clone()) {
-                        println!("debug:remembered-hostname:{}", &gai.hostname);
+                        debug!(log, "remembered-hostname"; "hostname" => &gai.hostname);
                     } else {
-                        println!("debug:forgot-hostname:{}", &gai.hostname);
+                        debug!(log, "forgot-hostname"; "hostname" => &gai.hostname);
                     }
                 }
             },

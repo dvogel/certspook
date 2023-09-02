@@ -13,8 +13,6 @@ use std::error::Error;
 use std::ffi::CStr;
 use std::mem;
 
-use crate::wrapped_sockaddr::WrappedSockaddr;
-
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GetAddrInfoResult {
     pub addr: IpAddr,
@@ -47,29 +45,25 @@ impl GetAddrInfoResult {
             let hostname = c_hostname
                 .to_str()
                 .with_context(|| "Could not decode hostname as UTF-8")?;
-            let ip_addr = match res.sa_family {
-                AF_INET => IpAddr::V4(unsafe {
+            let ip_addr = if res.sa_family == libc::AF_INET as u16 {
+                IpAddr::V4(unsafe {
                     Ipv4Addr::from(u32::from_be(res.saddr.saddr4.sin_addr.s_addr))
-                }),
-                AF_INET6 => {
-                    IpAddr::V6(unsafe { Ipv6Addr::from(res.saddr.saddr6.sin6_addr.s6_addr) })
-                }
-                _ => return Err(anyhow!("Unexpected sa_family value").into()),
+                })
+            } else if res.sa_family == libc::AF_INET6 as u16 {
+                IpAddr::V6(unsafe { Ipv6Addr::from(res.saddr.saddr6.sin6_addr.s6_addr) })
+            } else {
+                return Err(anyhow!("Unexpected sa_family value").into());
             };
 
-            eprintln!(
-                "debug:decoded-exported-gai-result:{}:{}",
-                &hostname, &ip_addr
-            );
             Ok(GetAddrInfoResult {
                 hostname: hostname.to_string(),
                 addr: ip_addr,
             })
         } else {
-            eprintln!("warn:unrecoggnized-exported-gai-result");
             Err(anyhow!(
-                "Unrecognized record length from ring buffer: {} bytes",
-                bytes.len()
+                "Unrecognized record length from ring buffer: {} bytes but expected {} bytes",
+                bytes.len(),
+                mem::size_of::<ExportedGaiResult>()
             )
             .into())
         }

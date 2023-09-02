@@ -7,6 +7,8 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use slog::{debug, Logger};
+
 use crate::check::CheckDatum;
 use crate::remote_connection::RemoteConnection;
 
@@ -30,6 +32,7 @@ impl Default for AddrSeenStats {
 }
 
 pub fn spawn_squelch_thread(
+    log: Logger,
     threshold: Duration,
     rx: Receiver<RemoteConnection>,
     tx: Sender<CheckDatum>,
@@ -54,12 +57,12 @@ pub fn spawn_squelch_thread(
                 None => true,
             };
             if will_check_now {
-                println!("debug:queued-connection:{}", &rconn);
+                debug!(log, "queued-connection"; "remote-connection" => &rconn.to_string());
                 std::thread::sleep(Duration::from_secs(1));
-                tx.send(CheckDatum::RemoteConnectionMessage(rconn));
+                let _ = tx.send(CheckDatum::RemoteConnectionMessage(rconn));
                 addr_stats.last_checked = Some(Instant::now());
             } else {
-                println!("debug:squelched-observation:{}", &rconn);
+                debug!(log, "squelched-observation"; "remote-connection" => &rconn.to_string());
             }
         }
     })

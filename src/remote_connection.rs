@@ -33,7 +33,7 @@ impl RemoteConnection {
     }
 
     pub fn ip_addr(&self) -> IpAddr {
-        self.addr.clone()
+        self.addr
     }
 
     pub fn port(&self) -> u16 {

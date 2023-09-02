@@ -189,6 +189,7 @@ int uretprobe_getaddrinfo(struct pt_regs *ctx) {
 			goto bail;
 		}
 
+		ex_res.sa_family = saddr.sa_family;
 		if (saddr.sa_family == AF_INET) {
 			if ((ret = bpf_probe_read_user(&ex_res.saddr.saddr4, sizeof(struct sockaddr_in), gai_res.ai_addr)) < 0) {
 				debug_msgf("Failed to copy sockaddr_in to exported_gai_result: %d", (__u64 *)&ret, sizeof(long));
