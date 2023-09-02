@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use anyhow::Result;
+use clap::Parser;
 use libbpf_rs::skel::OpenSkel;
 use libbpf_rs::skel::Skel;
 use libbpf_rs::skel::SkelBuilder;
@@ -28,6 +29,16 @@ use check::{spawn_check_thread, CheckDatum};
 use gai_result::GetAddrInfoResult;
 use remote_connection::RemoteConnection;
 use squelch::spawn_squelch_thread;
+
+#[derive(Parser, Debug)]
+#[command(about, long_about = None)]
+struct CmdArgs {
+    #[arg(long, default_value_t = 30)]
+    expiration_threshold: u32,
+
+    #[arg(long, default_value_t = 10)]
+    squelch_seconds: u32,
+}
 
 fn bump_memlock_rlimit() -> Result<()> {
     let rlimit = libc::rlimit {
@@ -93,8 +104,9 @@ fn main() -> Result<()> {
         o!(),
     );
 
-    const DEFAULT_EXPIRATION_THRESHOLD: time::Duration = time::Duration::days(365i64);
-    let expiration_threshold = DEFAULT_EXPIRATION_THRESHOLD;
+    let cmd_args = CmdArgs::parse();
+    let expiration_threshold = time::Duration::days(cmd_args.expiration_threshold as i64);
+
     info!(
         log_root,
         "configuration";
@@ -108,7 +120,7 @@ fn main() -> Result<()> {
     let (tx_rconn, rx_rconn) = channel::<RemoteConnection>();
     let _squelch_thread = spawn_squelch_thread(
         log_root.clone(),
-        Duration::from_secs(10u64),
+        Duration::from_secs(cmd_args.squelch_seconds as u64),
         rx_rconn,
         tx_chkque,
     );

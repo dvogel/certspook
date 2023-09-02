@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use slog::{debug, Logger};
+use slog::{debug, error, Logger};
 
 use crate::check::CheckDatum;
 use crate::remote_connection::RemoteConnection;
@@ -57,9 +57,15 @@ pub fn spawn_squelch_thread(
                 None => true,
             };
             if will_check_now {
-                debug!(log, "queued-connection"; "remote-connection" => &rconn.to_string());
                 std::thread::sleep(Duration::from_secs(1));
-                let _ = tx.send(CheckDatum::RemoteConnectionMessage(rconn));
+                match tx.send(CheckDatum::RemoteConnectionMessage(rconn)) {
+                    Ok(_) => {
+                        debug!(log, "queued-connection"; "remote-connection" => &rconn.to_string());
+                    }
+                    Err(e) => {
+                        error!(log, "failed-to-queue-connection"; "remote-connection" => &rconn.to_string());
+                    }
+                };
                 addr_stats.last_checked = Some(Instant::now());
             } else {
                 debug!(log, "squelched-observation"; "remote-connection" => &rconn.to_string());
