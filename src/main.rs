@@ -16,7 +16,7 @@ use libbpf_rs::RingBufferBuilder;
 use slog::{error, info, o, warn, Drain, Logger};
 
 mod certspook {
-    include!(concat!(env!("OUT_DIR"), "/certspook.skel.rs"));
+    include!("certspook.skel.rs");
 }
 mod check;
 mod gai_result;
@@ -127,9 +127,18 @@ fn main() -> Result<()> {
 
     bump_memlock_rlimit()?;
 
+    let current_pid: u32 = std::process::id();
+    info!(
+        log_root,
+        "startup";
+        "pid" => current_pid.to_string()
+    );
+
     let mut skel_builder = CertspookSkelBuilder::default();
     skel_builder.obj_builder.debug(true);
-    let open_skel = skel_builder.open()?;
+    let mut open_skel = skel_builder.open()?;
+    open_skel.bss().g_certspook_tgid = current_pid;
+
     let mut skel = open_skel.load()?;
     skel.attach()?;
 
