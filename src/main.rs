@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use std::num::ParseIntError;
 use std::sync::{
     mpsc::{channel, Sender},
     Mutex,
@@ -8,12 +9,13 @@ use std::time::Duration;
 
 use anyhow::bail;
 use anyhow::Result;
+use cidr_utils::cidr::{IpCidr, IpCidrError, Ipv4Cidr, Ipv6Cidr};
 use clap::Parser;
 use libbpf_rs::skel::OpenSkel;
 use libbpf_rs::skel::Skel;
 use libbpf_rs::skel::SkelBuilder;
 use libbpf_rs::RingBufferBuilder;
-use slog::{error, info, o, warn, Drain, Logger};
+use slog::{debug, error, info, o, warn, Drain, Logger};
 
 mod certspook {
     include!("certspook.skel.rs");
@@ -27,7 +29,7 @@ mod wrapped_sockaddr;
 use certspook::*;
 use check::{spawn_check_thread, CheckDatum};
 use gai_result::GetAddrInfoResult;
-use remote_connection::RemoteConnection;
+use remote_connection::{RemoteConnection, RemoteConnectionFilter};
 use squelch::spawn_squelch_thread;
 
 #[derive(Parser, Debug)]
@@ -38,6 +40,42 @@ struct CmdArgs {
 
     #[arg(long, default_value_t = 10)]
     squelch_seconds: u32,
+
+    #[arg(long, default_value_t = false)]
+    debug: bool,
+
+    // This currently only includes 443 for HTTPS because that is the only certificate checker
+    // implemented. It would be nice to support each of these eventually.
+    // 443: HTTPS
+    // 465: SMTP over TLS
+    // 587: SMTP with STARTLS
+    // 993: IMAP over TLS
+    // 995: POP over TLS
+    #[arg(long, default_value_t = String::from("443"))]
+    included_ports: String,
+
+    #[arg(long, default_value_t = String::from(""))]
+    included_networks: String,
+}
+
+impl CmdArgs {
+    pub fn included_networks(&self) -> Result<Vec<IpCidr>, IpCidrError> {
+        Result::from_iter(
+            self.included_networks
+                .split_terminator(',')
+                .map(|cidrstr| IpCidr::from_str(cidrstr))
+                .collect::<Vec<Result<IpCidr, IpCidrError>>>(),
+        )
+    }
+
+    pub fn included_ports(&self) -> Result<Vec<u16>, ParseIntError> {
+        Result::from_iter(
+            self.included_ports
+                .split_terminator(',')
+                .map(|cidrstr| cidrstr.parse::<u16>())
+                .collect::<Vec<Result<u16, ParseIntError>>>(),
+        )
+    }
 }
 
 fn bump_memlock_rlimit() -> Result<()> {
@@ -53,11 +91,20 @@ fn bump_memlock_rlimit() -> Result<()> {
     Ok(())
 }
 
-fn handle_record(log: Logger, bytes: &[u8], tx_rconn: &Sender<RemoteConnection>) -> i32 {
+fn handle_record(
+    log: Logger,
+    bytes: &[u8],
+    filter: &RemoteConnectionFilter,
+    tx_rconn: &Sender<RemoteConnection>,
+) -> i32 {
     if let Some(rconn) = RemoteConnection::from_bytes(bytes) {
-        if let Err(e) = tx_rconn.send(rconn) {
-            error!(log, "{}", e);
-            return 1;
+        if filter.allows(&rconn) {
+            if let Err(e) = tx_rconn.send(rconn) {
+                error!(log, "{}", e);
+                return 1;
+            }
+        } else {
+            debug!(log, "Ignoring remote connection."; "rconn" => format!("{}", rconn));
         }
     } else {
         warn!(log, "Unrecognized sockaddr record.");
@@ -66,15 +113,24 @@ fn handle_record(log: Logger, bytes: &[u8], tx_rconn: &Sender<RemoteConnection>)
     0
 }
 
-fn handle_gai_result(log: Logger, bytes: &[u8], tx_chkque: &Sender<CheckDatum>) -> i32 {
+fn handle_gai_result(
+    log: Logger,
+    bytes: &[u8],
+    filter: &RemoteConnectionFilter,
+    tx_chkque: &Sender<CheckDatum>,
+) -> i32 {
     // TODO: Some of these results are due to an IP address being looked up as a hostname. In that
     // case we see sensical but unhelpful events like this:
     // debug:decoded-exported-gai-result:162.243.1.193:162.243.1.193
     match GetAddrInfoResult::from_bytes(bytes) {
         Ok(gai_result) => {
-            if let Err(e) = tx_chkque.send(CheckDatum::GetAddrInfoMessage(gai_result)) {
-                error!(log, "{}", e);
-                return 1;
+            if filter.allows_addr(&gai_result.addr) {
+                if let Err(e) = tx_chkque.send(CheckDatum::GetAddrInfoMessage(gai_result)) {
+                    error!(log, "{}", e);
+                    return 1;
+                }
+            } else {
+                debug!(log, "Ignoring getaddrinfo() result."; "addr" => format!("{}", &gai_result.addr));
             }
         }
         Err(e) => {
@@ -99,18 +155,27 @@ fn pretty_duration(duration: &time::Duration) -> String {
 }
 
 fn main() -> Result<()> {
-    let log_root = slog::Logger::root(
-        Mutex::new(slog_json::Json::default(std::io::stderr())).map(slog::Fuse),
-        o!(),
-    );
-
     let cmd_args = CmdArgs::parse();
     let expiration_threshold = time::Duration::days(cmd_args.expiration_threshold as i64);
+
+    let log_root = slog::Logger::root(
+        Mutex::new(slog::LevelFilter::new(
+            slog_json::Json::default(std::io::stdout()),
+            match cmd_args.debug {
+                true => slog::Level::Debug,
+                false => slog::Level::Info,
+            },
+        ))
+        .map(slog::Fuse),
+        o!(),
+    );
 
     info!(
         log_root,
         "configuration";
-        "expiration_threshold" => pretty_duration(&expiration_threshold)
+        "expiration_threshold" => pretty_duration(&expiration_threshold),
+        "included_ports" => format!("{:?}", cmd_args.included_ports()?),
+        "included_networks" => format!("{:?}", cmd_args.included_networks()?),
     );
 
     let (tx_chkque, rx_chkque) = channel::<CheckDatum>();
@@ -135,7 +200,9 @@ fn main() -> Result<()> {
     );
 
     let mut skel_builder = CertspookSkelBuilder::default();
-    skel_builder.obj_builder.debug(true);
+    if cmd_args.debug {
+        skel_builder.obj_builder.debug(true);
+    }
     let mut open_skel = skel_builder.open()?;
     open_skel.bss().g_certspook_tgid = current_pid;
 
@@ -144,19 +211,26 @@ fn main() -> Result<()> {
 
     let mut map_handles = skel.maps_mut();
 
+    let rconn_filter = RemoteConnectionFilter::new(
+        cmd_args.included_networks()?.clone(),
+        cmd_args.included_ports()?.clone(),
+    );
+
     let mut connaddr_ringbuf_builder = RingBufferBuilder::new();
     connaddr_ringbuf_builder.add(map_handles.connaddrs(), {
-        let log = log_root.clone();
+        let log_root = log_root.clone();
         move |bytes| {
-            let log = log.clone();
-            handle_record(log, bytes, &tx_rconn)
+            let log_root = log_root.clone();
+            let rconn_filter = rconn_filter.clone();
+            handle_record(log_root, bytes, &rconn_filter, &tx_rconn)
         }
     })?;
     let connaddrs = connaddr_ringbuf_builder.build()?;
 
+    let gai_filter = RemoteConnectionFilter::new(cmd_args.included_networks()?.clone(), Vec::new());
     let mut ex_gai_ringbuf_builder = RingBufferBuilder::new();
     ex_gai_ringbuf_builder.add(map_handles.exported_gai_results(), move |bytes| {
-        handle_gai_result(log_root.clone(), bytes, &tx_chkque1)
+        handle_gai_result(log_root.clone(), bytes, &gai_filter, &tx_chkque1)
     })?;
     let exported_gai_results = ex_gai_ringbuf_builder.build()?;
 
