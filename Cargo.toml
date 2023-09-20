@@ -23,5 +23,5 @@ x509-certificate = "0.21.0"
 x509-parser = "0.15.1"
 
 [build-dependencies]
-libbpf-cargo = "0.21.1"
+libbpf-cargo = "0.21.2"
 

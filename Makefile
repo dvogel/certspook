@@ -1,7 +1,12 @@
-rebuild:
+
+build:
 	cargo libbpf build
 	cargo build
-	sudo setcap cap_perfmon,cap_bpf+ep ./target/debug/certspook
+	sudo setcap cap_sys_admin=ep ./target/debug/certspook
+
+rebuild:
+	make clean
+	make build
 
 debug:
 	./target/debug/certspook
@@ -12,4 +17,4 @@ run:
 clean:
 	cargo clean
 
-.PHONY: clean debug rebuild run
+.PHONY: clean debug gen_activity rebuild run

@@ -63,7 +63,7 @@ impl CmdArgs {
         Result::from_iter(
             self.included_networks
                 .split_terminator(',')
-                .map(|cidrstr| IpCidr::from_str(cidrstr))
+                .map(IpCidr::from_str)
                 .collect::<Vec<Result<IpCidr, IpCidrError>>>(),
         )
     }
@@ -92,7 +92,7 @@ fn bump_memlock_rlimit() -> Result<()> {
 }
 
 fn handle_record(
-    log: Logger,
+    log: &Logger,
     bytes: &[u8],
     filter: &RemoteConnectionFilter,
     tx_rconn: &Sender<RemoteConnection>,
@@ -114,7 +114,7 @@ fn handle_record(
 }
 
 fn handle_gai_result(
-    log: Logger,
+    log: &Logger,
     bytes: &[u8],
     filter: &RemoteConnectionFilter,
     tx_chkque: &Sender<CheckDatum>,
@@ -179,16 +179,19 @@ fn main() -> Result<()> {
     );
 
     let (tx_chkque, rx_chkque) = channel::<CheckDatum>();
-    let tx_chkque1 = tx_chkque.clone();
     let _check_thread = spawn_check_thread(log_root.clone(), expiration_threshold, rx_chkque);
 
     let (tx_rconn, rx_rconn) = channel::<RemoteConnection>();
-    let _squelch_thread = spawn_squelch_thread(
-        log_root.clone(),
-        Duration::from_secs(cmd_args.squelch_seconds as u64),
-        rx_rconn,
-        tx_chkque,
-    );
+    let _squelch_thread = {
+        let tx_chkque = tx_chkque.clone();
+
+        spawn_squelch_thread(
+            log_root.clone(),
+            Duration::from_secs(cmd_args.squelch_seconds as u64),
+            rx_rconn,
+            tx_chkque,
+        )
+    };
 
     bump_memlock_rlimit()?;
 
@@ -218,19 +221,14 @@ fn main() -> Result<()> {
 
     let mut connaddr_ringbuf_builder = RingBufferBuilder::new();
     connaddr_ringbuf_builder.add(map_handles.connaddrs(), {
-        let log_root = log_root.clone();
-        move |bytes| {
-            let log_root = log_root.clone();
-            let rconn_filter = rconn_filter.clone();
-            handle_record(log_root, bytes, &rconn_filter, &tx_rconn)
-        }
+        |bytes| handle_record(&log_root, bytes, &rconn_filter, &tx_rconn)
     })?;
     let connaddrs = connaddr_ringbuf_builder.build()?;
 
     let gai_filter = RemoteConnectionFilter::new(cmd_args.included_networks()?.clone(), Vec::new());
     let mut ex_gai_ringbuf_builder = RingBufferBuilder::new();
-    ex_gai_ringbuf_builder.add(map_handles.exported_gai_results(), move |bytes| {
-        handle_gai_result(log_root.clone(), bytes, &gai_filter, &tx_chkque1)
+    ex_gai_ringbuf_builder.add(map_handles.exported_gai_results(), |bytes| {
+        handle_gai_result(&log_root, bytes, &gai_filter, &tx_chkque)
     })?;
     let exported_gai_results = ex_gai_ringbuf_builder.build()?;
 
