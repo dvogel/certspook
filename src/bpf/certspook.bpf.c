@@ -16,6 +16,7 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
+#include <string.h>
 
 char LICENSE[] SEC("license") = "GPL";
 
@@ -134,6 +135,7 @@ int BPF_KPROBE(probe_getaddrinfo, const char *restrict node, const char *restric
     }
 
     struct composite_result comp_res;
+    memset(&comp_res, 0, sizeof(struct composite_result));
 
     if (bpf_probe_read_user_str(&comp_res.hostname, HOSTNAME_BUF_LEN, node) <= 0) {
         debug_msg("Hostname could not be copied from getaddrinfo() invocation.");
@@ -176,6 +178,7 @@ int uretprobe_getaddrinfo(struct pt_regs *ctx) {
 	struct addrinfo *gai_res_ptr;
 	struct addrinfo gai_res;
 	struct exported_gai_result ex_res;
+    memset(&ex_res, 0, sizeof(struct exported_gai_result));
 
 	if (bpf_probe_read_kernel(&ex_res.hostname, HOSTNAME_BUF_LEN, comp_res->hostname) < 0) {
 		debug_msg("Failed to read hostname from gai_callers value.");
