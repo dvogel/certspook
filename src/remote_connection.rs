@@ -87,7 +87,7 @@ impl RemoteConnectionFilter {
     pub fn allows_addr(&self, addr: &IpAddr) -> bool {
         match self.cidr_list.iter().find(|c| c.contains(*addr)) {
             Some(_) => true,
-            None => false,
+            None => self.cidr_list.is_empty(),
         }
     }
 }
