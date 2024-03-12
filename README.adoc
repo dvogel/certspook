@@ -1,3 +1,11 @@
+ifdef::env-github[]
+:tip-caption: :bulb:
+:note-caption: :information_source:
+:important-caption: :heavy_exclamation_mark:
+:caution-caption: :fire:
+:warning-caption: :warning:
+endif::[]
+
 # certspook
 
 This project is an experiment to determine if one could use eBPF to reliably capture enough TLS connection details in order to determine which remote certificates a system relies upon.
