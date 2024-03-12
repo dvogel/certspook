@@ -3,7 +3,11 @@
 This project is an experiment to determine if one could use eBPF to reliably capture enough TLS connection details in order to determine which remote certificates a system relies upon.
 
 [quote]
-The spooks were senior constables who wore no uniform, worked in pairs and followed constables about the city and suburbs to see if they did their work properly. 
+The spooks were senior constables who wore no uniform, worked in pairs and followed constables about the city and suburbs to see if they did their work properly.
 
 The idea is that eBPF can monitor outgoing connections, determine which are using TLS, and then export enough data to user-space for those certificates to be periodically checked for upcoming expirations.
+
+WARNING: This experiment was able to detect TLS certificate dependencies for many conventional use cases but it was far from being able to observe all such dependencies.
+
+TIP: Name resolution is an area experiencing significant change. Many major applications, such as chromium and firefox, use their own custom resolvers. They forego use of the conventional system DNS resolvers and use DNS-over-HTTPS. This creates a double-layer of potential TLS inspection required to achieve the goals of certspook.
 
